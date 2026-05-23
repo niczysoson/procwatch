@@ -1,4 +1,4 @@
-"""Periodic metrics reporter that logs a summary of all monitored processes."""
+"""Periodic metrics reporter for procwatch."""
 
 import logging
 import threading
@@ -8,64 +8,51 @@ from procwatch.metrics import MetricsRegistry
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_INTERVAL = 60  # seconds
+
 
 class MetricsReporter:
-    """Logs a metrics summary on a fixed interval using a background thread."""
+    """Logs metrics for all tracked processes at a fixed interval."""
 
     def __init__(
         self,
         registry: MetricsRegistry,
-        interval_seconds: float = 60.0,
+        interval: float = DEFAULT_INTERVAL,
     ) -> None:
-        if interval_seconds <= 0:
-            raise ValueError("interval_seconds must be positive")
         self._registry = registry
-        self._interval = interval_seconds
+        self._interval = interval
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def start(self) -> None:
         """Start the background reporting thread."""
-        if self._thread and self._thread.is_alive():
+        if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run, name="metrics-reporter", daemon=True
         )
         self._thread.start()
-        logger.debug("MetricsReporter started (interval=%.1fs)", self._interval)
+        logger.debug("MetricsReporter started (interval=%ss)", self._interval)
 
-    def stop(self, timeout: float = 5.0) -> None:
-        """Signal the background thread to stop and wait for it to finish."""
+    def stop(self) -> None:
+        """Stop the background reporting thread."""
         self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval + 1)
+            self._thread = None
         logger.debug("MetricsReporter stopped")
 
     def report_now(self) -> None:
-        """Emit a metrics summary immediately (may be called from any thread)."""
-        summary = self._registry.summary()
-        if not summary:
-            logger.info("[procwatch] no processes tracked yet")
-            return
-        for entry in summary:
+        """Emit a metrics snapshot immediately (can be called from any thread)."""
+        for name, metrics in self._registry.all().items():
             logger.info(
-                "[procwatch] process=%s starts=%d failures=%d "
-                "last_exit=%s uptime=%.1fs",
-                entry["name"],
-                entry["start_count"],
-                entry["failure_count"],
-                entry["last_exit_code"],
-                entry["uptime_seconds"] or 0.0,
+                "[metrics] process=%s starts=%d failures=%d uptime=%.1fs",
+                name,
+                metrics.start_count,
+                metrics.failure_count,
+                metrics.uptime_seconds(),
             )
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
 
     def _run(self) -> None:
         while not self._stop_event.wait(timeout=self._interval):
