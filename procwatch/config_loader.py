@@ -1,4 +1,6 @@
-"""Load monitor configuration from dicts or YAML files."""
+"""Load monitor configuration from a plain Python dictionary (e.g. parsed YAML/JSON)."""
+
+from __future__ import annotations
 
 from typing import Any, Dict
 
@@ -6,6 +8,7 @@ from procwatch.backoff import BackoffConfig
 from procwatch.monitor import MonitorConfig, ProcessMonitor
 from procwatch.process import ProcessConfig
 from procwatch.throttle import ThrottleConfig
+from procwatch.watchdog import WatchdogConfig
 
 
 def _parse_backoff(data: Dict[str, Any]) -> BackoffConfig:
@@ -21,6 +24,12 @@ def _parse_throttle(data: Dict[str, Any]) -> ThrottleConfig:
     return ThrottleConfig(
         max_restarts=data.get("max_restarts", 5),
         window_seconds=data.get("window_seconds", 60.0),
+    )
+
+
+def _parse_watchdog(data: Dict[str, Any]) -> WatchdogConfig:
+    return WatchdogConfig(
+        timeout_seconds=data.get("timeout_seconds", 30.0),
         enabled=data.get("enabled", True),
     )
 
@@ -28,7 +37,7 @@ def _parse_throttle(data: Dict[str, Any]) -> ThrottleConfig:
 def _parse_monitor_config(data: Dict[str, Any]) -> MonitorConfig:
     return MonitorConfig(
         poll_interval=data.get("poll_interval", 1.0),
-        max_restarts=data.get("max_restarts", -1),
+        max_respawn_attempts=data.get("max_respawn_attempts", 0),
     )
 
 
@@ -46,16 +55,21 @@ def _parse_process_config(data: Dict[str, Any]) -> ProcessConfig:
 
 
 def load_monitor_from_dict(data: Dict[str, Any]) -> ProcessMonitor:
+    """Build a fully configured ProcessMonitor from a config dictionary."""
     monitor_cfg = _parse_monitor_config(data.get("monitor", {}))
     monitor = ProcessMonitor(monitor_cfg)
+
     for proc_data in data.get("processes", []):
         proc_cfg = _parse_process_config(proc_data)
         monitor.add_process(proc_cfg)
+
     return monitor
 
 
 def load_monitor_from_file(path: str) -> ProcessMonitor:
-    import yaml  # type: ignore
+    """Parse a YAML config file and return a configured ProcessMonitor."""
+    import yaml  # optional dependency
+
     with open(path, "r") as fh:
         data = yaml.safe_load(fh) or {}
     return load_monitor_from_dict(data)
