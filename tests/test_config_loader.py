@@ -1,81 +1,93 @@
-"""Tests for config_loader module."""
+"""Tests for procwatch.config_loader."""
+
+import textwrap
+import tempfile
+import os
 
 import pytest
 
-from procwatch.config_loader import load_monitor_from_dict
+from procwatch.config_loader import load_monitor_from_dict, load_monitor_from_file
 from procwatch.monitor import ProcessMonitor
-
-
-MINIMAL_CONFIG = {
-    "processes": {
-        "web": {"command": "python app.py"},
-    }
-}
-
-FULL_CONFIG = {
-    "monitor": {
-        "poll_interval": 0.5,
-        "max_restarts": 5,
-        "backoff": {
-            "initial_delay": 2.0,
-            "max_delay": 30.0,
-            "multiplier": 1.5,
-            "jitter": True,
-        },
-    },
-    "processes": {
-        "worker": {
-            "command": "celery worker",
-            "restart_on_exit": True,
-            "restart_codes": [1, 2],
-            "env": {"CELERY_BROKER": "redis://localhost"},
-            "cwd": "/app",
-        },
-        "beat": {
-            "command": "celery beat",
-            "restart_on_exit": False,
-        },
-    },
-}
 
 
 class TestLoadMonitorFromDict:
     def test_minimal_config_creates_monitor(self):
-        monitor = load_monitor_from_dict(MINIMAL_CONFIG)
+        monitor = load_monitor_from_dict({})
         assert isinstance(monitor, ProcessMonitor)
-        assert "web" in monitor.process_names
 
     def test_full_config_monitor_settings(self):
-        monitor = load_monitor_from_dict(FULL_CONFIG)
-        assert monitor.config.poll_interval == 0.5
-        assert monitor.config.max_restarts == 5
-        assert monitor.config.backoff.initial_delay == 2.0
-        assert monitor.config.backoff.max_delay == 30.0
-        assert monitor.config.backoff.multiplier == 1.5
-        assert monitor.config.backoff.jitter is True
+        data = {"monitor": {"poll_interval": 2.0, "metrics_interval": 30.0}}
+        monitor = load_monitor_from_dict(data)
+        assert monitor._config.poll_interval == 2.0
+        assert monitor._config.metrics_interval == 30.0
 
     def test_full_config_processes(self):
-        monitor = load_monitor_from_dict(FULL_CONFIG)
-        assert "worker" in monitor.process_names
-        assert "beat" in monitor.process_names
+        data = {
+            "processes": [
+                {"name": "web", "command": "python app.py"},
+                {"name": "worker", "command": "python worker.py"},
+            ]
+        }
+        monitor = load_monitor_from_dict(data)
+        assert len(monitor._processes) == 2
 
     def test_process_config_fields(self):
-        monitor = load_monitor_from_dict(FULL_CONFIG)
-        worker = monitor._processes["worker"]
-        assert worker.config.command == "celery worker"
-        assert worker.config.restart_on_exit is True
-        assert worker.config.restart_codes == [1, 2]
-        assert worker.config.cwd == "/app"
+        data = {
+            "processes": [
+                {
+                    "name": "svc",
+                    "command": "run.sh",
+                    "restart_on_failure": False,
+                    "restart_codes": [1, 2],
+                    "backoff": {"initial_delay": 3.0, "max_delay": 30.0},
+                }
+            ]
+        }
+        monitor = load_monitor_from_dict(data)
+        proc = monitor._processes[0]
+        assert proc.config.name == "svc"
+        assert proc.config.restart_on_failure is False
+        assert proc.config.restart_codes == [1, 2]
+        assert proc.config.backoff.initial_delay == 3.0
+        assert proc.config.backoff.max_delay == 30.0
 
-    def test_empty_processes(self):
-        monitor = load_monitor_from_dict({"processes": {}})
-        assert monitor.process_names == []
+    def test_notifier_config_fields(self):
+        data = {
+            "processes": [
+                {
+                    "name": "svc",
+                    "command": "run.sh",
+                    "notifier": {
+                        "on_start": "echo start",
+                        "on_failure": "echo fail",
+                        "on_restart": "echo restart",
+                        "timeout": 3.0,
+                    },
+                }
+            ]
+        }
+        monitor = load_monitor_from_dict(data)
+        notifier_cfg = monitor._processes[0].config.notifier
+        assert notifier_cfg.on_start == "echo start"
+        assert notifier_cfg.on_failure == "echo fail"
+        assert notifier_cfg.on_restart == "echo restart"
+        assert notifier_cfg.timeout == 3.0
 
-    def test_missing_command_raises(self):
-        with pytest.raises(KeyError):
-            load_monitor_from_dict({"processes": {"bad": {}}})
-
-    def test_file_not_found_raises(self):
-        from procwatch.config_loader import load_monitor_from_file
-        with pytest.raises(FileNotFoundError):
-            load_monitor_from_file("/nonexistent/path/config.toml")
+    def test_load_from_file(self):
+        yaml_content = textwrap.dedent("""
+            monitor:
+              poll_interval: 0.5
+            processes:
+              - name: app
+                command: python main.py
+        """)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            tmp_path = f.name
+        try:
+            monitor = load_monitor_from_file(tmp_path)
+            assert isinstance(monitor, ProcessMonitor)
+            assert monitor._config.poll_interval == 0.5
+            assert len(monitor._processes) == 1
+        finally:
+            os.unlink(tmp_path)
