@@ -59,6 +59,15 @@ class TestSupervisorRegistryQuery:
         result = reg.all()
         assert set(result) == {sv1, sv2}
 
+    def test_all_returns_snapshot_not_live_view(self):
+        """Mutating the registry after calling all() should not affect the returned list."""
+        reg = SupervisorRegistry()
+        sv1 = _make_supervisor("a")
+        reg.register(sv1)
+        snapshot = reg.all()
+        reg.register(_make_supervisor("b"))
+        assert len(snapshot) == 1
+
     def test_names_returns_all_names(self):
         reg = SupervisorRegistry()
         reg.register(_make_supervisor("x"))
